@@ -206,8 +206,23 @@ void ClprDlg::OnBnClickedButton2()
 //车牌识别的主程序
 void ClprDlg::LprMain()
 {
-	ImPreProcessing(this->Src);
+	IplImage *GrayImage =NULL;
+	IplImage* PrePrecessingImg = ImPreProcessing(this->Src);
 	
+	LpLocation(PrePrecessingImg);
+
+	//定义ROI
+	CvSize size = cvSize(colEnd-colStart,rowEnd-rowStart);
+	cvSetImageROI(this->Src,cvRect(colStart,rowStart,size.width,size.height));//设置源图像ROI
+	CvRect roi = cvGetImageROI(this->Src);
+	IplImage* pDest = cvCreateImage(size,Src->depth,Src->nChannels);//创建目标图像
+
+	cvCopy(Src,pDest); //复制图像
+	cvResetImageROI(Src);//源图像用完后，清空ROI
+
+	cvShowImage("RIO.bmp",pDest);
+
+	cvReleaseImage(&PrePrecessingImg);
 }
 
 //图像预处理进程，输入为单色图，输出为处理后的指针
@@ -246,24 +261,35 @@ IplImage* ClprDlg::ImPreProcessing(IplImage* GrayImage)
 
 	//？进行瞎鸡巴多的开闭运算，原因未知
 	//进行模板为23*7 闭运算
+	//闭运算是先进行膨胀后腐蚀，是对白色区域进行；其实使用一个矩形核消除车牌中的黑色区域，显示出车牌的位置 
 	IplImage* bg1 = cvCreateImage(cvGetSize(GrayImage),IPL_DEPTH_8U,1);
 	strel = cvCreateStructuringElementEx(23,7,11,3,CV_SHAPE_RECT);
 	cvMorphologyEx(otsuImage,bg1,temp,strel,CV_MOP_CLOSE);
 	cvShowImage("二值化之后闭运算.bmp",bg1);
 
 	//进行模板为25*7的开运算
+	//开运算是是先进行腐蚀后膨胀，消除图像中那些小面积的白色部分
 	IplImage* bg2 = cvCreateImage(cvGetSize(GrayImage),IPL_DEPTH_8U,1);
 	strel = cvCreateStructuringElementEx(25,7,11,3,CV_SHAPE_RECT);
 	cvMorphologyEx(bg1,bg2,temp,strel,CV_MOP_OPEN);
 	cvShowImage("开运算图像.bmp",bg2);
 
 	//进行模板为9*1的开运算
+	//消除图像中那些横着的细小白色条纹
 	IplImage* bg3 = cvCreateImage(cvGetSize(GrayImage),IPL_DEPTH_8U,1);
 	strel = cvCreateStructuringElementEx(1,9,0,4,CV_SHAPE_RECT);
 	cvMorphologyEx(bg2,bg3,temp,strel,CV_MOP_OPEN);
 	cvShowImage("二闭运算.bmp",bg3);
+	cvSaveImage("二闭运算.bmp",bg3);
 
-	return Egray;
+	cvReleaseImage(&temp);
+	cvReleaseImage(&Egray);
+	cvReleaseImage(&AdjustImage);
+	cvReleaseImage(&bg1);
+	cvReleaseImage(&bg2);
+
+	//其中关于cvCreateImage的内存分配问题？
+	return bg3;
 }
 
 
@@ -302,4 +328,91 @@ void ClprDlg::ImageAdjust(IplImage *img_in,IplImage *img_out,double low_in, doub
 			((uchar*)(img_out->imageData + img_out->widthStep*y))[x*img_out->nChannels] = value0;
 		}
 	}
+}
+
+
+
+//车牌定位程序
+//输入：经过图像学处理后的图片
+//输出：在类中的变量，开始和结束的行列
+
+void ClprDlg::LpLocation(IplImage *img_in)
+{
+	int row = img_in->height;
+	int col = img_in->width;
+
+	int* horiLine = new int[col];
+	int* verLine = new int[row];
+	
+	memset(horiLine,0,sizeof(int)*col);
+	memset(verLine,0,sizeof(int)*row);
+	int value0;
+	//水平投影和垂直投影
+	for (int i = 0; i < row; i++)
+	{
+		for (int j = 0; j < col; j++)
+		{
+			value0 = ((uchar*)(img_in->imageData + img_in->widthStep*i))[j*img_in->nChannels];
+			if (value0 == 255)
+			{
+				verLine[i]++;
+				horiLine[j]++;
+			}
+		}
+	}
+
+	//找到水平和垂直的开始和结束位置
+	int rowStartTmp;
+	int rowEndTmp;
+	int colStartTmp;
+	int colEndTmp;
+
+	for (int i = row -1; i > 15; i--)
+	{
+		if (verLine[i] && verLine[i-3] && verLine[i-6] && verLine[i-15] )
+		{
+			rowEndTmp = i;
+		}
+	}
+
+	for (int i = rowEndTmp; i > 0; i--)
+	{
+		if(!verLine[i])
+		{
+			rowStartTmp = i;
+			break;
+		}
+	}
+
+	/////////////////////////////
+	for (int i = 0; i < col; i++)
+	{
+		if (horiLine[i] && horiLine[i+5] && horiLine[i+10] && horiLine[i+15] && horiLine[i+25] && horiLine[i+35] )
+		{
+			colStartTmp = i;
+		}
+	}
+
+	for (int i = colStartTmp; i < col; i++)
+	{
+		if(!horiLine[i])
+		{
+			colEndTmp = i;
+			break;
+		}
+	}
+
+	//由于后面也需要抠图所以需要增大区域
+	rowStart = rowStartTmp - 0.1*(rowEndTmp - rowStartTmp);
+	rowEnd = rowEndTmp + 0.1*(rowEndTmp - rowStartTmp);
+	colStart = colStartTmp - 0.15*(colEndTmp - colStartTmp);
+	colEnd = colEndTmp+0.2*(colEndTmp - colStartTmp);
+
+	if(rowStart < 0)
+		rowStart = 0;
+	if(colStart < 0)
+		colStart = 0;
+
+	delete []horiLine;
+	delete []verLine;
 }

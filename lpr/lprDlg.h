@@ -39,6 +39,11 @@ public:
 private:
 	IplImage* TheImage;
 	IplImage* Src;
+
+	int rowStart;
+	int rowEnd;
+	int colStart;
+	int colEnd;
 public:
 	afx_msg void OnBnClickedButton2();
 
@@ -48,4 +53,7 @@ protected:
 	IplImage* ImPreProcessing(IplImage* GrayImage);
 	//灰度拉伸函数
 	void ImageAdjust(IplImage *img_in,IplImage *img_out,double low_in, double high_in,double low_out, double high_out);
+
+	//车牌定位
+	void LpLocation(IplImage *img_in);
 };
