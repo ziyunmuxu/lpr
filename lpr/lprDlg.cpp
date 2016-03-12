@@ -240,7 +240,7 @@ void ClprDlg::LprMain(IplImage *ImageSrc)
 
 	cvShowImage("RIO.bmp",pDest);
 
-	//现在的图像为pDest，为一个粗定位的图片
+	//现在的图像为pDest，为一个粗定位的图片,是一个黑白图像
 	IplImage* OtsuOrienImage = cvCreateImage(cvGetSize(pDest),pDest->depth,pDest->nChannels);
 	cvThreshold(pDest,OtsuOrienImage,0,255,CV_THRESH_OTSU);
 	cvShowImage("OtsuOrientImage",OtsuOrienImage);
@@ -254,16 +254,28 @@ void ClprDlg::LprMain(IplImage *ImageSrc)
 	angle = LineFitting(OtsuOrienImage);
 
 
+	//对得到的角度分别对原来的黑白图和得到的二值化图像进行旋转校正
+	//具体校正函数未知
+	//个人觉得应该是对原来的彩图进行校正之后，然后再生成二值化图像，然后在对图像确定上下边界
+	//源程序的做法是：将之前的二值化图像进行旋转，然后对旋转的图像又进行二值化，通过二值化之后再确定上下边界
+	//rotated_localBW为目标车牌的黑白图像，rotated_Otsu为目标车牌图像的二值化结果
+	IplImage* rotated_localBW = cvCreateImage(cvGetSize(pDest),pDest->depth, pDest->nChannels);
+	rotated_localBW = ImageRotate(pDest,angle);
+	IplImage* rotated_Otsu = cvCreateImage(cvGetSize(rotated_localBW),rotated_localBW->depth,rotated_localBW->nChannels);
+	cvThreshold(rotated_localBW,rotated_Otsu,0,255,CV_THRESH_OTSU);
+
+	cvSaveImage("rotate_local.bmp",rotated_localBW);
+	cvSaveImage("rotate_otsu.bmp",rotated_Otsu);
+
+
+	//确定上下边界
+
 
 
 
 	//cvReleaseImage(&PrePrecessingImg);
 	cvReleaseImage(&pDest);
 	cvReleaseImage(&OtsuOrienImage);
-
-
-
-
 
 }
 
@@ -775,4 +787,61 @@ IplImage *ClprDlg::ImageRotate(IplImage *src, double angle)
 	cvWarpAffine( src, newImage, &M,CV_INTER_LINEAR+CV_WARP_FILL_OUTLIERS,cvScalarAll(0) );
 
 	return newImage;
+}
+
+
+//对抠出来的车牌确定车牌上下边界
+//函数的设计思想是统计height上水平投影上穿越的次数，如果大于times的话就说明是边界
+void ClprDlg::UpDownBoard(IplImage* RotatedImage, int times)
+{
+	upboard = 0;
+	downboard = RotatedImage->height - 1;
+
+	int rows = RotatedImage->height;
+	int cols = RotatedImage->width;
+
+	//定义一个数组来存放水平投影的穿越特征
+	int* thru = new int[rows];
+	memset(thru,0,sizeof(int)*rows);
+
+	//用两个值分别来保存相邻两个点的值
+	uchar grayValue0 = 0;
+	uchar grayValue1 = 0;
+
+	for(int i = 0; i < rows; i++)
+	{
+		for (int j = 0; j < cols-1; j++)
+		{
+			grayValue0 = ((uchar*)(RotatedImage->imageData + i*(RotatedImage->widthStep)))[j*RotatedImage->nChannels];
+			grayValue1 = ((uchar*)(RotatedImage->imageData + i*(RotatedImage->widthStep)))[(j+1	)*RotatedImage->nChannels];
+			if (!grayValue0 && grayValue1)
+			{
+				thru[i]++;
+			}
+		}
+	}
+
+	//找到上边界开始的点
+	for (int i = 1; i < rows-6; i++)
+	{
+		if ((thru[i] >= times)&&(thru[i+1] >= times)&&(thru[i+2] >= times)&&(thru[i+3] >= times)&&(thru[i+4] >= times)&&(thru[i+5] >= times)&&(thru[i+6] >= times))
+		{
+			//注意如果这个点满足应该是上一个点
+			upboard = i-1;
+			break;
+		}
+	}
+
+	//找下边界
+	for (int i = rows-2 ; i > 6; i--)
+	{
+		if ((thru[i] >= times)&&(thru[i-1] >= times)&&(thru[i-2] >= times)&&(thru[i-3] >= times)&&(thru[i-4] >= times)&&(thru[i-5] >= times)&&(thru[i-6] >= times))
+		{
+			//注意如果这个点满足应该是上一个点
+			upboard = i+1;
+			break;
+		}
+	}
+
+	delete[] thru;
 }

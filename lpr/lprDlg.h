@@ -44,6 +44,9 @@ private:
 	int rowEnd;
 	int colStart;
 	int colEnd;
+
+	int downboard;
+	int upboard;
 public:
 	afx_msg void OnBnClickedButton2();
 
@@ -63,4 +66,7 @@ protected:
 
 	//图像旋转，返回已经旋转的车牌
 	IplImage *ImageRotate(IplImage *src, double angle);
+
+	//对扣出来的车牌进行确定字符的上下边界
+	void UpDownBoard(IplImage* RotatedImage, int times);
 };
