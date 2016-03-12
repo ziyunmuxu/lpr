@@ -7,7 +7,7 @@
 #include "lprDlg.h"
 #include "afxdialogex.h"
 
-
+#define PI 3.1415926
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -160,7 +160,7 @@ HCURSOR ClprDlg::OnQueryDragIcon()
 
 void ClprDlg::OnBnClickedButton1()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	 //TODO: 在此添加控件通知处理程序代码
 	CString m_strPicPath;  
 	//弹出选择图片对话框  
 	CFileDialog dlg(true,_T("*.bmp"),NULL,OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_HIDEREADONLY,_T("image file(*.bmp;*.jpg)|*.bmp;*.jpg|All Files(*.*)|*.*|"),NULL);  
@@ -170,15 +170,27 @@ void ClprDlg::OnBnClickedButton1()
 	m_strPicPath = dlg.GetPathName();           //获取图片路径  
 	m_strPicPath.Replace(_T("//"),_T("////"));  
   
-	TheImage=cvLoadImage((CT2CA)m_strPicPath,1); //读取彩色图  
-	Src = cvLoadImage((CT2CA)m_strPicPath,0);        //读取灰度图片  
+	Src=cvLoadImage((CT2CA)m_strPicPath,1); //读取彩色图  
+	//Src = cvLoadImage((CT2CA)m_strPicPath,0);        //读取灰度图片  
   
   
 	if (TheImage != NULL)  
 	{  
-		ShowImage(TheImage, IDC_STATIC);  
+		ShowImage(Src, IDC_STATIC);  
 		//ShowImage(Src, IDC_STATIC);
 	} 
+
+
+	//源程序
+	//CFileDialog dlg(TRUE, NULL, NULL, NULL,NULL,this);
+	//CString strFileName;//记录选择文件路径
+	//if (!dlg.DoModal() == IDOK) return;
+	//strFileName = dlg.GetPathName();
+
+	////IplImage *image=NULL; //原始图像
+	//if(Src) cvReleaseImage(&Src);
+	//Src = cvLoadImage(strFileName); //显示图片
+
 }
 
 void ClprDlg::ShowImage(IplImage* img, UINT ID) //在picture控件中显示图片的代码  
@@ -199,30 +211,60 @@ void ClprDlg::ShowImage(IplImage* img, UINT ID) //在picture控件中显示图片的代码
 void ClprDlg::OnBnClickedButton2()
 {
 	// TODO: 在此添加控件通知处理程序代码
-	LprMain();
+	LprMain(this->Src);
 }
 
 
 //车牌识别的主程序
-void ClprDlg::LprMain()
+//void ClprDlg::LprMain()
+void ClprDlg::LprMain(IplImage *ImageSrc)
 {
 	IplImage *GrayImage =NULL;
-	IplImage* PrePrecessingImg = ImPreProcessing(this->Src);
+	GrayImage = cvCreateImage(cvSize(ImageSrc->width,ImageSrc->height),IPL_DEPTH_8U,1);
+	//把彩色图像转换为灰度图像
+	cvCvtColor(ImageSrc,GrayImage,CV_RGB2GRAY);
+
+
+	IplImage* PrePrecessingImg = ImPreProcessing(GrayImage);
 	
 	LpLocation(PrePrecessingImg);
 
 	//定义ROI
 	CvSize size = cvSize(colEnd-colStart,rowEnd-rowStart);
-	cvSetImageROI(this->Src,cvRect(colStart,rowStart,size.width,size.height));//设置源图像ROI
-	CvRect roi = cvGetImageROI(this->Src);
-	IplImage* pDest = cvCreateImage(size,Src->depth,Src->nChannels);//创建目标图像
+	cvSetImageROI(GrayImage,cvRect(colStart,rowStart,size.width,size.height));//设置源图像ROI
+	CvRect roi = cvGetImageROI(GrayImage);
+	IplImage* pDest = cvCreateImage(size,GrayImage->depth,GrayImage->nChannels);//创建目标图像
 
-	cvCopy(Src,pDest); //复制图像
-	cvResetImageROI(Src);//源图像用完后，清空ROI
+	cvCopy(GrayImage,pDest); //复制图像
+	cvResetImageROI(GrayImage);//源图像用完后，清空ROI
 
 	cvShowImage("RIO.bmp",pDest);
 
-	cvReleaseImage(&PrePrecessingImg);
+	//现在的图像为pDest，为一个粗定位的图片
+	IplImage* OtsuOrienImage = cvCreateImage(cvGetSize(pDest),pDest->depth,pDest->nChannels);
+	cvThreshold(pDest,OtsuOrienImage,0,255,CV_THRESH_OTSU);
+	cvShowImage("OtsuOrientImage",OtsuOrienImage);
+	cvSaveImage("二值化之后的图像.bmp",OtsuOrienImage);
+
+
+
+	//对车牌进行旋转，其中angle
+	double angle = 0;
+	IplImage* RotateImage_tmp = cvCreateImage(cvGetSize(pDest),pDest->depth,pDest->nChannels);
+	angle = LineFitting(OtsuOrienImage);
+
+
+
+
+
+	//cvReleaseImage(&PrePrecessingImg);
+	cvReleaseImage(&pDest);
+	cvReleaseImage(&OtsuOrienImage);
+
+
+
+
+
 }
 
 //图像预处理进程，输入为单色图，输出为处理后的指针
@@ -236,28 +278,28 @@ IplImage* ClprDlg::ImPreProcessing(IplImage* GrayImage)
 	//开运算
 	//?开运算中几个参数的意义，注意里面需要temp来进行缓存
 	cvMorphologyEx(GrayImage,Egray,temp,strel,CV_MOP_OPEN,1);
-	cvShowImage("b1.bmp",Egray);
+	//cvShowImage("b1.bmp",Egray);
 
 	//灰度相减
 	//cvSub中如果相减出现负数怎么处理，应该全部为0
 	//如果使用开运算的结果减去原来的单色图，得到的图像全部为0
 	//cvSub(Egray,GrayImage,temp);
 	cvSub(GrayImage,Egray,temp,NULL);
-	cvShowImage("b2.bmp",temp);
+	//cvShowImage("b2.bmp",temp);
 	
 	//灰度拉伸
 	//由于整个图像太暗，需要对图像进行拉伸
 	//灰度拉伸的函数是由自己写的
 	IplImage* AdjustImage = cvCreateImage(cvGetSize(GrayImage),IPL_DEPTH_8U,1);
 	ImageAdjust(temp,AdjustImage,0.25,0.8,0,1);
-	cvShowImage("b3.bmp",AdjustImage);
+	//cvShowImage("b3.bmp",AdjustImage);
 
 
 	////otsu二值化
 	//对拉伸完的图像进行二值化处理，方便后面进行边缘判断
 	IplImage* otsuImage = cvCreateImage(cvGetSize(GrayImage),IPL_DEPTH_8U, 1);
 	cvThreshold(AdjustImage,otsuImage,0,255,CV_THRESH_OTSU);
-	cvShowImage("二值化.bmp",otsuImage);
+	//cvShowImage("二值化.bmp",otsuImage);
 
 	//？进行瞎鸡巴多的开闭运算，原因未知
 	//进行模板为23*7 闭运算
@@ -265,21 +307,21 @@ IplImage* ClprDlg::ImPreProcessing(IplImage* GrayImage)
 	IplImage* bg1 = cvCreateImage(cvGetSize(GrayImage),IPL_DEPTH_8U,1);
 	strel = cvCreateStructuringElementEx(23,7,11,3,CV_SHAPE_RECT);
 	cvMorphologyEx(otsuImage,bg1,temp,strel,CV_MOP_CLOSE);
-	cvShowImage("二值化之后闭运算.bmp",bg1);
+	//cvShowImage("二值化之后闭运算.bmp",bg1);
 
 	//进行模板为25*7的开运算
 	//开运算是是先进行腐蚀后膨胀，消除图像中那些小面积的白色部分
 	IplImage* bg2 = cvCreateImage(cvGetSize(GrayImage),IPL_DEPTH_8U,1);
 	strel = cvCreateStructuringElementEx(25,7,11,3,CV_SHAPE_RECT);
 	cvMorphologyEx(bg1,bg2,temp,strel,CV_MOP_OPEN);
-	cvShowImage("开运算图像.bmp",bg2);
+	//cvShowImage("开运算图像.bmp",bg2);
 
 	//进行模板为9*1的开运算
 	//消除图像中那些横着的细小白色条纹
 	IplImage* bg3 = cvCreateImage(cvGetSize(GrayImage),IPL_DEPTH_8U,1);
 	strel = cvCreateStructuringElementEx(1,9,0,4,CV_SHAPE_RECT);
 	cvMorphologyEx(bg2,bg3,temp,strel,CV_MOP_OPEN);
-	cvShowImage("二闭运算.bmp",bg3);
+	//cvShowImage("二闭运算.bmp",bg3);
 	cvSaveImage("二闭运算.bmp",bg3);
 
 	cvReleaseImage(&temp);
@@ -292,6 +334,53 @@ IplImage* ClprDlg::ImPreProcessing(IplImage* GrayImage)
 	return bg3;
 }
 
+//源程序
+//IplImage *ClprDlg::ImPreProcessing(IplImage *GrayImage)
+//{
+//	IplImage * temp = cvCreateImage(cvGetSize(GrayImage), 8,1);	
+//	IplImage *Egray = cvCreateImage(cvSize(GrayImage->width,GrayImage->height),IPL_DEPTH_8U,1);	//开运算后的结果  的存放数组
+//	IplConvKernel *strel=cvCreateStructuringElementEx(9,9,4,4,CV_SHAPE_RECT);	//开运算模板 9*9
+//	//开运算
+//	cvMorphologyEx(GrayImage,Egray,temp,strel,CV_MOP_OPEN,1);
+//	cvShowImage("b1.bmp",Egray);
+//	//灰度相减
+//	cvSub(GrayImage,Egray,temp,NULL);
+//	cvShowImage("b2.bmp",temp);
+//
+//	//灰度拉伸
+//	IplImage *AdjustImage =cvCreateImage(cvGetSize(GrayImage), 8,1);
+//	ImageAdjust(temp,AdjustImage,0.25,0.8,0,1);
+//	cvShowImage("b3.bmp",AdjustImage);
+//	//otsu二值化
+//	IplImage *OtsuImage =cvCreateImage(cvGetSize(GrayImage), 8,1);
+//	cvThreshold(AdjustImage, OtsuImage, 0, 255 , CV_THRESH_OTSU); //
+//	cvShowImage("OtsuImage", OtsuImage); 
+//	//闭运算
+//	IplImage *bg1 = cvCreateImage(cvSize(GrayImage->width,GrayImage->height),IPL_DEPTH_8U,1);	//开运算后的结果
+//	strel=cvCreateStructuringElementEx(23,7,11,3,CV_SHAPE_RECT);	//闭运算模板 9*25
+//	cvMorphologyEx(OtsuImage,bg1,temp,strel,CV_MOP_CLOSE,1);
+//	cvShowImage("bg1", bg1);
+//	//开运算
+//	IplImage *bg2 = cvCreateImage(cvSize(GrayImage->width,GrayImage->height),IPL_DEPTH_8U,1);	//开运算后的结果
+//	strel=cvCreateStructuringElementEx(25,7,11,3,CV_SHAPE_RECT);	//开运算模板 9*27
+//	cvMorphologyEx(bg1,bg2,temp,strel,CV_MOP_OPEN,1);
+//	cvShowImage("bg2", bg2);
+//	//开运算
+//	IplImage *bg3 = cvCreateImage(cvSize(GrayImage->width,GrayImage->height),IPL_DEPTH_8U,1);	//开运算后的结果
+//	strel=cvCreateStructuringElementEx(1,9,0,4,CV_SHAPE_RECT);	//开运算模板 9*1
+//	cvMorphologyEx(bg2,bg3,temp,strel,CV_MOP_OPEN,1);
+//
+//	cvShowImage("bg3", bg3);
+//
+//	cvReleaseImage(&temp);
+//	cvReleaseImage(&Egray);
+//	cvReleaseImage(&AdjustImage);
+//	cvReleaseImage(&OtsuImage);
+//	cvReleaseImage(&bg1);
+//	cvReleaseImage(&bg2);
+//
+//	return bg3;
+//}
 
 
 /****************************
@@ -329,13 +418,35 @@ void ClprDlg::ImageAdjust(IplImage *img_in,IplImage *img_out,double low_in, doub
 		}
 	}
 }
-
-
+//源程序
+//void ClprDlg::ImageAdjust(IplImage *img_in,IplImage *img_out,double low_in, double high_in,double low_out, double high_out)
+//{
+//	double low = low_in*255;  
+//	double high = high_in*255;  
+//	double bottom = low_out*255;  
+//	double top = high_out*255;  
+//	double scope_in = high - low;  
+//	double scope_out = top - bottom;  
+//
+//	int x,y;  
+//	double val0/*,val1,val2*/;  
+//
+//	// intensity transform  
+//	for( y = 0; y < img_in->height; y++) {  
+//		for (x = 0; x < img_in->width; x++){  
+//			val0 = ((uchar*)(img_in->imageData+img_in->widthStep*y))[x*img_in->nChannels];   
+//			val0 = pow((val0 - low)/scope_in,1)*scope_out+bottom;  
+//			if(val0>255) val0=255;   
+//			if(val0<0) val0=0;   
+//			((uchar*)(img_out->imageData+img_out->widthStep*y))[x*img_in->nChannels]=(uchar)val0;  
+//		}  
+//	}  
+//}
 
 //车牌定位程序
 //输入：经过图像学处理后的图片
 //输出：在类中的变量，开始和结束的行列
-
+//0307其中读取图像的时候位置有问题(左上角才为0,0)
 void ClprDlg::LpLocation(IplImage *img_in)
 {
 	int row = img_in->height;
@@ -343,6 +454,8 @@ void ClprDlg::LpLocation(IplImage *img_in)
 
 	int* horiLine = new int[col];
 	int* verLine = new int[row];
+	/*int horiLine[400];
+	int verLine[400];*/
 	
 	memset(horiLine,0,sizeof(int)*col);
 	memset(verLine,0,sizeof(int)*row);
@@ -367,15 +480,16 @@ void ClprDlg::LpLocation(IplImage *img_in)
 	int colStartTmp;
 	int colEndTmp;
 
-	for (int i = row -1; i > 15; i--)
+	for (int i = row -1; i > 0; i--)
 	{
-		if (verLine[i] && verLine[i-3] && verLine[i-6] && verLine[i-15] )
+		if (verLine[i] && verLine[i-1] && verLine[i-2] && verLine[i-3] && verLine[i-10] && verLine[i-15] )
 		{
 			rowEndTmp = i;
+			break;
 		}
 	}
 
-	for (int i = rowEndTmp; i > 0; i--)
+	for (int i = rowEndTmp; i > rowEndTmp - 60; i--)
 	{
 		if(!verLine[i])
 		{
@@ -387,13 +501,14 @@ void ClprDlg::LpLocation(IplImage *img_in)
 	/////////////////////////////
 	for (int i = 0; i < col; i++)
 	{
-		if (horiLine[i] && horiLine[i+5] && horiLine[i+10] && horiLine[i+15] && horiLine[i+25] && horiLine[i+35] )
+		if (horiLine[i]  && horiLine[i+10] && horiLine[i+20] && horiLine[i+30] && horiLine[i+40] )
 		{
 			colStartTmp = i;
+			break;
 		}
 	}
 
-	for (int i = colStartTmp; i < col; i++)
+	for (int i = colStartTmp + 1; i < colStartTmp + 200; i++)
 	{
 		if(!horiLine[i])
 		{
@@ -403,10 +518,14 @@ void ClprDlg::LpLocation(IplImage *img_in)
 	}
 
 	//由于后面也需要抠图所以需要增大区域
-	rowStart = rowStartTmp - 0.1*(rowEndTmp - rowStartTmp);
-	rowEnd = rowEndTmp + 0.1*(rowEndTmp - rowStartTmp);
-	colStart = colStartTmp - 0.15*(colEndTmp - colStartTmp);
-	colEnd = colEndTmp+0.2*(colEndTmp - colStartTmp);
+	rowStart = rowStartTmp - 0.15*(rowEndTmp - rowStartTmp);
+	rowEnd = rowEndTmp + 0.2*(rowEndTmp - rowStartTmp);
+	colStart = colStartTmp - 0.1*(colEndTmp - colStartTmp);
+	colEnd = colEndTmp+0.1*(colEndTmp - colStartTmp);
+	/*rowStart = rowStartTmp;
+	rowEnd = rowEndTmp;
+	colStart = colStartTmp;
+	colEnd = colEndTmp;*/
 
 	if(rowStart < 0)
 		rowStart = 0;
@@ -415,4 +534,245 @@ void ClprDlg::LpLocation(IplImage *img_in)
 
 	delete []horiLine;
 	delete []verLine;
+}
+//源程序
+//void ClprDlg::LpLocation(IplImage *img)
+//{
+//	int rows = img->height;
+//	int cols = img->width;
+//	int *rowtmp = new int[rows];
+//	int *coltmp = new int[cols];
+//	int grayval;
+//	int startlinetmp=0;
+//	int endlinetmp=0;
+//	int startcoltmp=0;
+//	int endcoltmp=0;
+//
+//	//水平投影
+//	for(int y = 0; y < rows; y++) 
+//	{
+//		rowtmp[y]=0;
+//		for (int x = 0; x < cols; x++)
+//		{  
+//			grayval = ((uchar*)(img->imageData+img->widthStep*y))[x*img->nChannels];   
+//			if(grayval==255) rowtmp[y]++;    
+//		}  
+//	}  
+//
+//	for(int i=rows-1;i>0;i--)
+//	{
+//		if(rowtmp[i]&&rowtmp[i-1]&&rowtmp[i-2]&&rowtmp[i-3]&&rowtmp[i-10]&&rowtmp[i-15])
+//		{
+//			startlinetmp = i;
+//			break;
+//		}	
+//	}
+//
+//	for(int i=startlinetmp;i>startlinetmp-60;i--)
+//	{
+//		if(!rowtmp[i])
+//		{
+//			endlinetmp = i;
+//			break;
+//		}	
+//	}
+//
+//	//垂直投影
+//	for (int x = 0; x < cols; x++) 
+//	{  
+//		coltmp[x] = 0;
+//		for(int y = endlinetmp; y < startlinetmp; y++)
+//		{  
+//			grayval = ((uchar*)(img->imageData+img->widthStep*y))[x*img->nChannels];   
+//			if(grayval==255) coltmp[x]++;    
+//		}  
+//	}  
+//
+//	for(int i=0;i<cols-1;i++)
+//	{
+//		if(coltmp[i]&&coltmp[i+10]&&coltmp[i+20]&&coltmp[i+30]&&coltmp[i+40])
+//		{
+//			startcoltmp = i;
+//			break;
+//		}	
+//	}
+//
+//	for(int i=startcoltmp+1;i<startcoltmp+200;i++)
+//	{
+//		if(!coltmp[i])
+//		{
+//			endcoltmp = i;
+//			break;
+//		}	
+//	}
+//
+//	rowEnd=startlinetmp+0.2*(startlinetmp-endlinetmp);
+//	rowStart=endlinetmp-0.15*(startlinetmp-endlinetmp);
+//	colStart=startcoltmp-0.1*(endcoltmp-startcoltmp);
+//	colEnd=endcoltmp+0.1*(endcoltmp-startcoltmp);
+//
+//	delete []rowtmp;
+//	delete []coltmp;
+//}
+
+
+//对图像进行角度校正，输出需要旋转的角度
+double ClprDlg::LineFitting(IplImage* img)
+{
+	double angle1 = 0, angle2 = 0, angle = 0;
+	int rows = img->height;
+	int cols = img->width;
+	int count = 0;
+	int grayval;
+
+	//下边缘拟合
+	//首先统计下边缘的范围中有多少个点需要拟合
+	for (int x = 0; x < cols; x++)
+	{
+		for (int y = rows-1; y >2*rows/3; y--)
+		{
+			grayval = ((uchar*)(img->imageData + img->widthStep*y))[x*img->nChannels];
+			if(grayval == 255)
+			{
+				count++;
+				break;
+			}
+		}
+	}
+
+	int* x1 = new int[count];
+	int* y1 = new int[count];
+	int k = 0;
+
+	for (int i = 0; i < cols; i++)
+	{
+		for(int j = rows - 1; j>2*rows/3; j--)
+		{
+			grayval = ((uchar*)(img->imageData + img->widthStep*j))[i*img->nChannels];
+			if (grayval == 255)
+			{
+				x1[k] = i;
+				y1[k] = j;
+				k++;
+				break;
+			}
+		}
+	}
+
+	//这时候得到了下边缘的x和y的坐标,返回的值是下边缘相对于x轴的角度
+	angle1 = PolyFit(x1,y1,count);
+
+	//上边缘拟合
+	count = 0;
+	for (int x = 0; x < cols; x++)
+	{
+		for (int y = 0; y < 1*rows/3; y++)
+		{
+			grayval = ((uchar*)(img->imageData + img->widthStep*y))[x*img->nChannels];
+			if(grayval == 255)
+			{
+				count++;
+				break;
+			}
+		}
+	}
+
+	int* x2 = new int[count];
+	int* y2 = new int[count];
+	k = 0;
+
+	for (int i = 0; i < cols; i++)
+	{
+		for(int j = 0; j < 1*rows/3; j++)
+		{
+			grayval = ((uchar*)(img->imageData + img->widthStep*j))[i*img->nChannels];
+			if (grayval == 255)
+			{
+				x2[k] = i;
+				y2[k] = j;
+				k++;
+				break;
+			}
+		}
+	}
+
+	//这时候得到了下边缘的x和y的坐标,返回的值是下边缘相对于x轴的角度
+	angle2 = PolyFit(x2,y2,count);
+
+	angle = (angle1 + angle2)/2;
+
+	delete[] x1;
+	delete[] y1;
+	delete[] x2;
+	delete[] y2;
+
+	return angle;
+}
+
+//输入count个xy坐标，拟合成一条直线，并输出直线的角度
+double ClprDlg::PolyFit(int* x, int* y, int count)
+{
+	double a=0,b=0,c=0,d=0;
+	double k=0; //直线斜率
+
+	for(int i = 0;i < count;i++)
+	{
+		a += x[i]*x[i];
+		b += x[i];
+		c += x[i]*y[i];
+		d += y[i];
+	}
+	k = (count*c - b*d)/(count*a - b*b);
+	//斜率反正切值，得到一个弧度，通过PI的计算得到最后的角度
+	return atan(k)*180/PI;
+}
+
+
+//图像旋转
+/****************************
+***函数功能 ：			图像旋转
+***输入		：src		待旋转的图像
+			：angle		待拟旋转的角度
+***返回值	：			旋转后的图像的指针
+*****************************/
+void bound(int x, int y, float ca, float sa, int *xmin, int *xmax, int *ymin, int *ymax)
+{   
+	int rx,ry;
+	// 顺时针旋转
+	rx = (int)floor(ca*(float)x+sa*(float)y);
+	ry = (int)floor(-sa*(float)x+ca*(float)y);
+	if (rx<*xmin) *xmin=rx; if (rx>*xmax) *xmax=rx;
+	if (ry<*ymin) *ymin=ry; if (ry>*ymax) *ymax=ry;
+}
+IplImage *ClprDlg::ImageRotate(IplImage *src, double angle)
+{
+	double anglerad  = (CV_PI* (angle/180)) ;
+	int newheight =int (fabs(( sin(anglerad)*src->width )) + fabs(( cos(anglerad)*src->height )) );
+	int newwidth  =int (fabs(( sin(anglerad)*src->height)) + fabs(( cos(anglerad)*src->width)) );
+	float m[6];            
+	CvMat M = cvMat( 2, 3, CV_32F, m );
+	int  nx,ny; 
+	float  ca,sa;
+	int  xmin,xmax,ymin,ymax,sx,sy;
+	ca = (float)cos((double)(angle)*CV_PI/180.0);
+	sa = (float)sin((double)(angle)*CV_PI/180.0);
+	nx = src->width;
+	ny=src->height;
+	xmin = xmax = ymin = ymax = 0;
+	bound(nx-1,0,ca,sa,&xmin,&xmax,&ymin,&ymax);
+	bound(0,ny-1,ca,sa,&xmin,&xmax,&ymin,&ymax);
+	bound(nx-1,ny-1,ca,sa,&xmin,&xmax,&ymin,&ymax);
+	sx = xmax-xmin+1;
+	sy = ymax-ymin+1;
+	IplImage* newImage;
+	newImage=cvCreateImage(cvSize(sx,sy),src->depth,src->nChannels);
+	m[0] = ca;
+	m[1] = sa;
+	m[2] =-(float)xmin; 
+	m[3] =-m[1];
+	m[4] = m[0];
+	m[5] =-(float)ymin;
+	cvWarpAffine( src, newImage, &M,CV_INTER_LINEAR+CV_WARP_FILL_OUTLIERS,cvScalarAll(0) );
+
+	return newImage;
 }

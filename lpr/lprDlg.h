@@ -49,11 +49,18 @@ public:
 
 
 protected:
-	void LprMain();
+	void LprMain(IplImage *ImageSrc);
 	IplImage* ImPreProcessing(IplImage* GrayImage);
 	//灰度拉伸函数
 	void ImageAdjust(IplImage *img_in,IplImage *img_out,double low_in, double high_in,double low_out, double high_out);
 
 	//车牌定位
 	void LpLocation(IplImage *img_in);
+
+	//图像校正，返回图像需要旋转的角度
+	double LineFitting(IplImage* img);
+	double PolyFit(int* x, int* y, int count);
+
+	//图像旋转，返回已经旋转的车牌
+	IplImage *ImageRotate(IplImage *src, double angle);
 };
