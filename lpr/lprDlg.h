@@ -69,4 +69,8 @@ protected:
 
 	//对扣出来的车牌进行确定字符的上下边界
 	void UpDownBoard(IplImage* RotatedImage, int times);
+
+
+	//连通域分割
+	void ConnectRegion(const IplImage*, int* , int*);
 };

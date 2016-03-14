@@ -6,13 +6,26 @@
 #include "lpr.h"
 #include "lprDlg.h"
 #include "afxdialogex.h"
+#include <iostream>
 
 #define PI 3.1415926
+
+//在连通域标记中使用
+#define     NO_OBJECT       0  
+//MIN在opencv中有定义，不需要重新定义
+//#define     MIN(x, y)       (((x) < (y)) ? (x) : (y))  
+#define     ELEM(img, r, c) (CV_IMAGE_ELEM(img, unsigned char, r, c))  
+#define     ONETWO(L, r, c, col) (L[(r) * (col) + c]) 
+
+//使用cout
+using namespace std;
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
 
+
+char separatepathName[7];
 
 // 用于应用程序“关于”菜单项的 CAboutDlg 对话框
 
@@ -102,6 +115,11 @@ BOOL ClprDlg::OnInitDialog()
 	SetIcon(m_hIcon, FALSE);		// 设置小图标
 
 	// TODO: 在此添加额外的初始化代码
+	//这个代码是在MFC中使用控制台窗口
+	/*AllocConsole();
+	freopen("CON", "r", stdin );
+	freopen("CON", "w", stdout);
+	freopen("CON", "w", stderr);*/
 
 	return TRUE;  // 除非将焦点设置到控件，否则返回 TRUE
 }
@@ -269,6 +287,62 @@ void ClprDlg::LprMain(IplImage *ImageSrc)
 
 
 	//确定上下边界
+	UpDownBoard(rotated_Otsu,8);
+
+	//确定上下边界之后的原图和二值化图像
+	//首先通过RIO在原图上扣除确定上下边界的那一部分图上，然后在根据二值化得到结果
+	//得到车牌的上下边界原图rotated_updown_locBW和二值化之后的图rotated_updown_Otsu
+	CvSize size1 = cvSize(rotated_localBW->width,downboard - upboard);
+	cvSetImageROI(rotated_localBW,cvRect(0,upboard,size1.width,size1.height));
+	IplImage* rotated_updown_locBW = cvCreateImage(size1,rotated_localBW->depth,rotated_localBW->nChannels);
+	cvCopy(rotated_localBW,rotated_updown_locBW);
+	cvResetImageROI(rotated_localBW);
+	//cvShowImage("上下边界车牌",rotated_updown_locBW);
+
+	IplImage* rotated_updown_Otsu = cvCreateImage(cvGetSize(rotated_updown_locBW),rotated_updown_locBW->depth,rotated_updown_locBW->nChannels);
+	cvThreshold(rotated_updown_locBW,rotated_updown_Otsu,0,255,CV_THRESH_OTSU);
+	cvSaveImage("上下边界二值化.bmp",rotated_updown_Otsu);
+
+
+	//连通域分割
+	int numbers = 0;
+	int resultpos[20] = {0};
+	ConnectRegion(rotated_updown_Otsu,&numbers,resultpos);
+
+	for(int i=0;i<numbers;i++)
+	{
+		int leftborder=resultpos[2*i];
+		int rightborder=resultpos[2*i+1];
+		if(resultpos[2*i+1]-resultpos[2*i]<rotated_updown_Otsu->height/2)
+		{
+			leftborder=(resultpos[2*i]+resultpos[2*i+1])/2-rotated_updown_Otsu->height/4;
+			rightborder=(resultpos[2*i]+resultpos[2*i+1])/2+rotated_updown_Otsu->height/4;
+		}
+		if(leftborder>resultpos[2*i])leftborder=resultpos[2*i];
+		if(rightborder<resultpos[2*i+1])rightborder=resultpos[2*i+1];
+		if(leftborder<0)leftborder=0;
+		if(rightborder>rotated_updown_Otsu->width-1)rightborder=rotated_updown_Otsu->width-1;
+		size= cvSize(rightborder-leftborder,rotated_updown_Otsu->height);//区域大小
+		cvSetImageROI(rotated_updown_Otsu,cvRect(leftborder,0,size.width,size.height));//设置源图像ROI
+		roi = cvGetImageROI(rotated_updown_Otsu);
+		pDest = cvCreateImage(size,rotated_updown_Otsu->depth,rotated_updown_Otsu->nChannels);//创建目标图像
+		cvCopy(rotated_updown_Otsu,pDest); //复制图像
+		IplImage *pDest1=cvCreateImage(cvSize(24,48),IPL_DEPTH_8U ,1);
+		cvResize(pDest,pDest1,CV_INTER_LINEAR);
+		CString str="fenge",str1;
+		str1.Format("%d",i);
+		str+=str1;
+		cvShowImage(str, pDest1);
+
+		sprintf(separatepathName,"cvpic\\sp_%d.jpg",i);
+		cvSaveImage(separatepathName,pDest1);		
+		if(i==7)
+			break;
+		//IdenResult = RecogniseChar(pDest1,i);
+		//cvResetImageROI(GrayImage);//源图像用完后，清空ROI
+
+	}
+
 
 
 
@@ -792,6 +866,7 @@ IplImage *ClprDlg::ImageRotate(IplImage *src, double angle)
 
 //对抠出来的车牌确定车牌上下边界
 //函数的设计思想是统计height上水平投影上穿越的次数，如果大于times的话就说明是边界
+//经检验，出来的上下边界和实际上是一致的
 void ClprDlg::UpDownBoard(IplImage* RotatedImage, int times)
 {
 	upboard = 0;
@@ -822,26 +897,460 @@ void ClprDlg::UpDownBoard(IplImage* RotatedImage, int times)
 	}
 
 	//找到上边界开始的点
-	for (int i = 1; i < rows-6; i++)
+	for (int i = 0; i < rows-6; i++)
 	{
 		if ((thru[i] >= times)&&(thru[i+1] >= times)&&(thru[i+2] >= times)&&(thru[i+3] >= times)&&(thru[i+4] >= times)&&(thru[i+5] >= times)&&(thru[i+6] >= times))
 		{
-			//注意如果这个点满足应该是上一个点
-			upboard = i-1;
+			//注意如果是上边界的话，直接取第一满足条件的点就可以了
+			upboard = i;
 			break;
 		}
 	}
 
 	//找下边界
-	for (int i = rows-2 ; i > 6; i--)
+	for (int i = rows-1 ; i > 6; i--)
 	{
 		if ((thru[i] >= times)&&(thru[i-1] >= times)&&(thru[i-2] >= times)&&(thru[i-3] >= times)&&(thru[i-4] >= times)&&(thru[i-5] >= times)&&(thru[i-6] >= times))
 		{
-			//注意如果这个点满足应该是上一个点
-			upboard = i+1;
+			//注意如果是下边界应该是i+1，方便以后我们size的使用
+			downboard = i+1;
 			break;
 		}
 	}
 
 	delete[] thru;
+}
+
+
+
+
+//连通域标记
+//代码来源http://blog.csdn.net/yysdsyl/article/details/5343075
+int find( int set[], int x )  
+{  
+	int r = x;  
+	while ( set[r] != r )  
+		r = set[r];  
+	return r;  
+}
+/* 
+labeling scheme 
++-+-+-+ 
+|D|C|E| 
++-+-+-+ 
+|B|A| | 
++-+-+-+ 
+| | | | 
++-+-+-+ 
+A is the center pixel of a neighborhood.  In the 3 versions of 
+connectedness: 
+4:  A connects to B and C 
+6:  A connects to B, C, and D 
+8:  A connects to B, C, D, and E 
+*/  
+/////////////////////////////  
+//by yysdsyl  
+//  
+//input:img     --  gray image  
+//      n       --  n connectedness  
+//      labels  --  label of each pixel, labels[row * col]  
+//output:  number of connected regions  
+//  
+//
+int bwlabel(const IplImage* img, int n, int* labels)  
+{  
+	if(n != 4 && n != 8)  
+		n = 4;  
+	int nr = img->height;  
+	int nc = img->width;  
+	int total = nr * nc;  
+	// results  
+	memset(labels, 0, total * sizeof(int));  
+	int nobj = 0;                               // number of objects found in image  
+	// other variables                               
+	int* lset = new int[total];   // label table  
+	memset(lset, 0, total * sizeof(int));  
+	int ntable = 0;  
+	for( int r = 0; r < nr; r++ )   
+	{  
+		for( int c = 0; c < nc; c++ )   
+		{              
+			if ( ELEM(img, r, c) )   // if A is an object  
+			{                 
+				// get the neighboring pixels B, C, D, and E  
+				int B, C, D, E;  
+				if ( c == 0 )   
+					B = 0;   
+				else   
+					B = find( lset, ONETWO(labels, r, c - 1, nc) );  
+				if ( r == 0 )   
+					C = 0;   
+				else   
+					C = find( lset, ONETWO(labels, r - 1, c, nc) );  
+				if ( r == 0 || c == 0 )   
+					D = 0;   
+				else   
+					D = find( lset, ONETWO(labels, r - 1, c - 1, nc) );  
+				if ( r == 0 || c == nc - 1 )   
+					E = 0;  
+				else   
+					E = find( lset, ONETWO(labels, r - 1, c + 1, nc) );  
+				if ( n == 4 )   
+				{  
+					// apply 4 connectedness  
+					if ( B && C )   
+					{        // B and C are labeled  
+						if ( B == C )  
+							ONETWO(labels, r, c, nc) = B;  
+						else {  
+							lset[C] = B;  
+							ONETWO(labels, r, c, nc) = B;  
+						}  
+					}   
+					else if ( B )             // B is object but C is not  
+						ONETWO(labels, r, c, nc) = B;  
+					else if ( C )               // C is object but B is not  
+						ONETWO(labels, r, c, nc) = C;  
+					else   
+					{                      // B, C, D not object - new object  
+						//   label and put into table  
+						ntable++;  
+						ONETWO(labels, r, c, nc) = lset[ ntable ] = ntable;  
+					}  
+				}   
+				else if ( n == 6 )   
+				{  
+					// apply 6 connected ness  
+					if ( D )                    // D object, copy label and move on  
+						ONETWO(labels, r, c, nc) = D;  
+					else if ( B && C )   
+					{        // B and C are labeled  
+						if ( B == C )  
+							ONETWO(labels, r, c, nc) = B;  
+						else   
+						{  
+							int tlabel = MIN(B,C);  
+							lset[B] = tlabel;  
+							lset[C] = tlabel;  
+							ONETWO(labels, r, c, nc) = tlabel;  
+						}  
+					}   
+					else if ( B )             // B is object but C is not  
+						ONETWO(labels, r, c, nc) = B;  
+					else if ( C )               // C is object but B is not  
+						ONETWO(labels, r, c, nc) = C;  
+					else   
+					{                      // B, C, D not object - new object  
+						//   label and put into table  
+						ntable++;  
+						ONETWO(labels, r, c, nc) = lset[ ntable ] = ntable;  
+					}  
+				}  
+				else if ( n == 8 )   
+				{  
+					// apply 8 connectedness  
+					if ( B || C || D || E )   
+					{  
+						int tlabel = B;  
+						if ( B )   
+							tlabel = B;  
+						else if ( C )   
+							tlabel = C;  
+						else if ( D )   
+							tlabel = D;  
+						else if ( E )   
+							tlabel = E;  
+						ONETWO(labels, r, c, nc) = tlabel;  
+						if ( B && B != tlabel )   
+							lset[B] = tlabel;  
+						if ( C && C != tlabel )   
+							lset[C] = tlabel;  
+						if ( D && D != tlabel )   
+							lset[D] = tlabel;  
+						if ( E && E != tlabel )   
+							lset[E] = tlabel;  
+					}   
+					else   
+					{  
+						//   label and put into table  
+						ntable++;  
+						ONETWO(labels, r, c, nc) = lset[ ntable ] = ntable;  
+					}  
+				}  
+			}   
+			else   
+			{  
+				ONETWO(labels, r, c, nc) = NO_OBJECT;      // A is not an object so leave it  
+			}  
+		}  
+	}  
+	// consolidate component table  
+	for( int i = 0; i <= ntable; i++ )  
+		lset[i] = find( lset, i );                                                                                                   
+	// run image through the look-up table  
+	for( int r = 0; r < nr; r++ )  
+		for( int c = 0; c < nc; c++ )  
+			ONETWO(labels, r, c, nc) = lset[ ONETWO(labels, r, c, nc) ];  
+	// count up the objects in the image  
+	for( int i = 0; i <= ntable; i++ )  
+		lset[i] = 0;  
+	for( int r = 0; r < nr; r++ )  
+		for( int c = 0; c < nc; c++ )  
+			lset[ ONETWO(labels, r, c, nc) ]++;  
+	// number the objects from 1 through n objects  
+	nobj = 0;  
+	lset[0] = 0;  
+	for( int i = 1; i <= ntable; i++ )  
+		if ( lset[i] > 0 )  
+			lset[i] = ++nobj;  
+	// run through the look-up table again  
+	for( int r = 0; r < nr; r++ )  
+		for( int c = 0; c < nc; c++ )  
+			ONETWO(labels, r, c, nc) = lset[ ONETWO(labels, r, c, nc) ];  
+	//  
+	delete[] lset;  
+	return nobj;  
+} 
+
+
+//删除连通域数组中的某个label，并使用心得label来替代
+void removeLabel(int* LabelArray, int size, int oldval, int newval)
+{
+	for(int i = 0; i< size; i++)
+	{
+		if (LabelArray[i] == oldval)
+		{
+			LabelArray[i] = newval;
+		}
+	}
+}
+
+//求出某个连通域的左右边界
+//输入为连通域数组，数组的长度，需要寻找的连通域k，boardArray为左右边界的数组
+void LCboard(const int* LabelArray, int cols, int size, int k, int* boardArray)
+{
+	int lboard = cols - 1;
+	int rboard = 0;
+	int m;//临时保存的边界
+	for(int i = 0; i < size; i++)
+	{
+		if (LabelArray[i] == k)
+		{
+			m = i % cols;
+			lboard = MIN(lboard,m);
+			rboard = MAX(rboard,m);
+		}
+	}
+	if (lboard < rboard)
+	{
+		boardArray[2*k - 2] = lboard;
+		boardArray[2*k - 1] = rboard;
+	}
+}
+
+
+//合并包含关系的连通域，并且将连通域排序
+//先排序后进行合并
+void mergeBoard(int* labelBoard, int* labelBoard_sort, int labelNumbers, int* labelNumbers_sort)
+{
+	//使用选择排序，按照左边界的大小进行排序
+	for (int i = 0; i < labelNumbers - 1; i++)
+	{
+		int k = i;
+		int temp;
+		int temp1;
+		for(int j = i + 1; j < labelNumbers; j++)
+		{
+			if(labelBoard[2*j] < labelBoard[2*k])
+			{
+				k = j;
+			}
+		}
+		if (k != i)
+		{
+			temp = labelBoard[2*i];
+			temp1 = labelBoard[2*i+1];
+			labelBoard[2*i] = labelBoard[2*k];
+			labelBoard[2*i+1] = labelBoard[2*k+1];
+			labelBoard[2*k] = temp;
+			labelBoard[2*k+1] = temp1;
+		}
+	}
+
+	//根据排序来删除包含关系，并将最后得到的边界放入新的左右边界数组中labelBoard_sort
+
+	//使用一个数组来记录删除之后有效的边界位置
+	int* flag = new int[labelNumbers];
+	memset(flag, 0, sizeof(int)*labelNumbers);
+	for (int i = 1; i < labelNumbers; i++)
+	{
+		if (labelBoard[2*i+1] < labelBoard[2*i-1])
+		{
+			flag[i-1] = 1;
+		}
+	}
+
+	//根据flag标志创建一个新的labelBoard_sort
+	int count = 0;
+	for(int i = 0; i < labelNumbers; i++)
+	{
+		if (flag[i] == 0)
+		{
+			labelBoard_sort[2*count] = labelBoard[2*i];
+			labelBoard_sort[2*count+1] = labelBoard[2*i+1];	
+			count++;
+		}
+	}
+	*labelNumbers_sort = count;
+}
+
+//连通域分割，图像输入二值化后的图片，输出numbers和存放分割之后的坐标
+//对原图使用const，保证原图的数据不会被修改，以免各种复制
+void ClprDlg::ConnectRegion(const IplImage* RotateImage2, int* numbers , int* resultpos)
+{
+	//定义一个一维数组来存放标记之后的结果，大小根据RotateImage2的大小来确定
+	int cols = RotateImage2->width;
+	int rows = RotateImage2->height;
+	int* labelArray = new int[cols * rows];
+	memset(labelArray, 0 , sizeof(int)*cols*rows);
+
+	//用一个变量来保存连通域标记之后的返回值，连通域的个数
+	int labelNumbers = 0;
+	labelNumbers = bwlabel(RotateImage2,8,labelArray);
+
+	//在控制台中打印出labelArray，验证函数
+	/*for (int i = 0; i < rows; i++)
+	{
+		for(int j = 0; j < cols; j++)
+		{
+			cout << labelArray[i*cols + j];
+		}
+		cout << endl;
+	}
+	cout << "连通域的个数："<<labelNumbers;*/
+
+	//求各个连通域的面积，并存放在areaRegion中
+	int* LabelArea = new int[labelNumbers];
+	memset(LabelArea,0,sizeof(int)*labelNumbers);
+	for (int i = 0; i < cols*rows; i++)
+	{
+		int k = labelArray[i];
+		if (k > 0)
+		{
+			LabelArea[k-1]++;
+		}
+	}
+
+	//设定连通域面积的范围，根据高度来设定
+	int lowArea = rows * rows /20;
+	int highArea = rows * rows * 5 /12;
+	//使用这个newLabel来记录重新排序后的label值
+	int labelNumbers_tmp = labelNumbers;
+	int* newLabel = new int[labelNumbers_tmp];
+	for (int i = 0; i < labelNumbers_tmp; i++)
+	{
+		newLabel[i] = 1;
+	}
+	//对面积进行比较，删除不符合条件的面积
+	for(int i = 0; i < labelNumbers_tmp; i++)
+	{
+		if (LabelArea[i] < lowArea || LabelArea[i] > highArea)
+		{
+			removeLabel(labelArray,rows*cols,i+1,0);
+			labelNumbers--;
+			newLabel[i] = 0;
+		}
+	}
+
+	//重新排序得到新的label值
+	//首先计算newLabel的值，重新的映射值
+	int count_label = 0;
+	for (int i = 0; i < labelNumbers_tmp; i++)
+	{
+		if (newLabel[i] != 0)
+		{
+			//这个计算方法是有错误的，由于你计算的时候如果用累加的话，会导致后面的数字全部错误
+			/*for(int j = 0; j < i; j++)
+			{
+			newLabel[i] += newLabel[j];
+			}
+			cout << newLabel[i] << "  ";*/
+			count_label++;
+			newLabel[i] = count_label;
+		}
+	}
+
+	//重新排序，得到新的labelArray
+	for (int i = 0; i < cols*rows; i++)
+	{
+		int k = labelArray[i];
+		if (k != 0)
+		{
+			labelArray[i] = newLabel[k-1];
+		}
+	}
+
+	/*for (int i = 0; i < rows; i++)
+	{
+		for(int j = 0; j < cols; j++)
+		{
+			cout << labelArray[i*cols + j];
+		}
+		cout << endl;
+	}
+	cout << "连通域的个数："<<labelNumbers;*/
+
+
+	//记录每一个连通域的宽度,连通域k的宽度位于2k-2和2k-1的位置
+	int* labelBoard = new int[2*labelNumbers];
+	memset(labelBoard, 0, sizeof(int)*2*labelNumbers);
+	//int labelBoard[20] = {0};
+	for(int i = 0; i < labelNumbers; i++)
+	{
+		LCboard(labelArray,cols,cols*rows,i+1,labelBoard);
+	}
+
+	//通过连通域的宽度，舍去过宽的连通域
+	labelNumbers_tmp = labelNumbers;
+	for(int i = 0; i < labelNumbers_tmp; i++)
+	{
+		if (labelBoard[2*i+1] - labelBoard[2*i] > rows*4/3)
+		{
+			if (i != labelNumbers_tmp-1)
+			{
+				labelBoard[2*i+1] = labelBoard[2*i+3];
+				labelBoard[2*i] = labelBoard[2*i+2];
+			}
+			else
+			{
+				labelBoard[2*i+1] = labelBoard[2*i-1];
+				labelBoard[2*i] = labelBoard[2*i-2];
+			}
+		}
+	}
+	int* labelBoard_sort = new int[labelNumbers_tmp];
+	memset(labelBoard_sort,0,sizeof(int)*labelNumbers_tmp);
+	//这时候labelNumbers的数值已经更新，同时labelBoard_sort也是更新好了的数组，虽然中间可能含有冗余的空间
+	mergeBoard(labelBoard,labelBoard_sort,labelNumbers_tmp,&labelNumbers);
+
+	//根据连通域的数据，对车牌的连通域进行划分（车牌有七个连通域）
+	if (labelNumbers == 7)
+		for (int i = 0; i < 2*labelNumbers; i++)
+			resultpos[i] = labelBoard_sort[i];
+	else
+		if (labelNumbers == 6)
+			if (resultpos[0] > rows)
+			{
+				resultpos[0] = 0;
+				resultpos[1] = labelBoard_sort[0]-1;
+				for (int i = 2; i < 2*labelNumbers; i++)
+					resultpos[i] = labelBoard_sort[i-2];
+			}
+		else
+			if (labelNumbers > 7)
+			{
+				for (int i = 2; i < 2*labelNumbers; i++)
+					resultpos[i] = labelBoard_sort[i-2];
+			}
+	*numbers = 7;
 }
